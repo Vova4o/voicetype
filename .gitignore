@@ -1,0 +1,11 @@
+.DS_Store
+.codebase-graph/
+/voicetype
+/Voicetype.app/Contents/MacOS/
+/Voicetype.app/Contents/_CodeSignature/
+*.log
+*.pcm
+*.wav
+*.aiff
+.env
+.env.*
