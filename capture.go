@@ -17,11 +17,17 @@ func (e *captureFailure) Unwrap() error { return e.cause }
 
 // microphoneReader bounds each pipe read, including reads after device loss.
 type microphoneReader struct {
-	pipe    *os.File
-	timeout time.Duration
+	pipe        *os.File
+	timeout     time.Duration
+	checkDevice func() error
 }
 
 func (r microphoneReader) Read(buffer []byte) (int, error) {
+	if r.checkDevice != nil {
+		if err := r.checkDevice(); err != nil {
+			return 0, err
+		}
+	}
 	if err := r.pipe.SetReadDeadline(time.Now().Add(r.timeout)); err != nil {
 		return 0, fmt.Errorf("задать таймаут микрофона: %w", err)
 	}
@@ -53,4 +59,21 @@ func superviseCapture(ctx context.Context, attempt func(context.Context) error, 
 		case <-timer.C:
 		}
 	}
+}
+
+func inputDeviceCheck(current func() (uint32, error)) (func() error, error) {
+	initial, err := current()
+	if err != nil {
+		return nil, err
+	}
+	return func() error {
+		device, err := current()
+		if err != nil {
+			return err
+		}
+		if device != initial {
+			return fmt.Errorf("системный микрофон изменился: %d → %d", initial, device)
+		}
+		return nil
+	}, nil
 }

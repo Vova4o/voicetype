@@ -135,10 +135,18 @@ func run(args []string, stdout, stderr io.Writer, state *dictationState) error {
 		return listen(ctx, *device, engine, deliver)
 	}
 	return superviseCapture(ctx, func(ctx context.Context) error {
+		var checkDevice func() error
+		if *device == ":default" {
+			var err error
+			checkDevice, err = inputDeviceCheck(defaultInputDeviceID)
+			if err != nil {
+				return &captureFailure{err}
+			}
+		}
 		return listenCapture(ctx, *device, engine, deliver, microphoneTimeout, func() {
 			state.setReady()
 			logger.Info("звук с микрофона поступает", "device", *device)
-		})
+		}, checkDevice)
 	}, func(err error) {
 		engine.reset()
 		state.recovering(err)
@@ -147,10 +155,10 @@ func run(args []string, stdout, stderr io.Writer, state *dictationState) error {
 }
 
 func listen(ctx context.Context, device string, engine recognizer, deliver func(context.Context, string) error) error {
-	return listenCapture(ctx, device, engine, deliver, microphoneTimeout, nil)
+	return listenCapture(ctx, device, engine, deliver, microphoneTimeout, nil, nil)
 }
 
-func listenCapture(ctx context.Context, device string, engine recognizer, deliver func(context.Context, string) error, idleTimeout time.Duration, ready func()) error {
+func listenCapture(ctx context.Context, device string, engine recognizer, deliver func(context.Context, string) error, idleTimeout time.Duration, ready func(), checkDevice func() error) error {
 	captureCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cmd := exec.CommandContext(captureCtx, "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "avfoundation", "-i", device, "-ar", "16000", "-ac", "1", "-f", "s16le", "-")
@@ -174,7 +182,7 @@ func listenCapture(ctx context.Context, device string, engine recognizer, delive
 	var captureErr error
 	go func() {
 		defer close(done)
-		captureErr = readMicrophone(captureCtx, microphoneReader{pipe: audioPipe, timeout: idleTimeout}, chunks)
+		captureErr = readMicrophone(captureCtx, microphoneReader{pipe: audioPipe, timeout: idleTimeout, checkDevice: checkDevice}, chunks)
 		if captureErr != nil {
 			cancel()
 			pipe.Close()

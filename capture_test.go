@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -36,7 +37,7 @@ fi
 				cancel()
 			}
 			return nil
-		}, time.Second, func() { readyCount++ })
+		}, time.Second, func() { readyCount++ }, nil)
 	}, func(err error) {
 		recoveries++
 		if !errors.Is(err, os.ErrDeadlineExceeded) {
@@ -79,5 +80,48 @@ func TestCaptureRestartsUnexpectedEOF(t *testing.T) {
 	err := superviseCapture(ctx, func(context.Context) error { return nil }, func(error) { retried = true; cancel() }, 0)
 	if err != nil || !retried {
 		t.Fatalf("retried=%t error=%v", retried, err)
+	}
+}
+
+func TestInputDeviceCheckDetectsChangeWithLiveAudio(t *testing.T) {
+	current := uint32(1)
+	check, err := inputDeviceCheck(func() (uint32, error) { return current, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	if _, err := writer.Write([]byte{1, 0, 2, 0}); err != nil {
+		t.Fatal(err)
+	}
+	input := microphoneReader{pipe: reader, timeout: time.Second, checkDevice: check}
+	buffer := make([]byte, 2)
+	if _, err := input.Read(buffer); err != nil {
+		t.Fatal(err)
+	}
+	current = 2
+	if _, err := input.Read(buffer); err == nil || !strings.Contains(err.Error(), "системный микрофон изменился") {
+		t.Fatalf("device change was ignored: %v", err)
+	}
+}
+
+func TestInputDeviceCheckKeepsExistingDevice(t *testing.T) {
+	check, err := inputDeviceCheck(func() (uint32, error) { return 42, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := check(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInputDeviceCheckReportsUnavailableDevice(t *testing.T) {
+	failure := errors.New("no input device")
+	if _, err := inputDeviceCheck(func() (uint32, error) { return 0, failure }); !errors.Is(err, failure) {
+		t.Fatalf("error = %v", err)
 	}
 }
