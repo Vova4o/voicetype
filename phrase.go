@@ -80,4 +80,11 @@ func (p *phraseRecognizer) flush() (string, error) {
 	return p.decoder.Recognize(samples)
 }
 
+func (p *phraseRecognizer) reset() {
+	p.buffer = nil
+	p.preRoll = nil
+	p.voicedSamples = 0
+	p.silentSamples = 0
+}
+
 func (p *phraseRecognizer) Close() { p.decoder.Close() }

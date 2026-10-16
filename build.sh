@@ -7,4 +7,4 @@ fi
 go build -o voicetype .
 mkdir -p Voicetype.app/Contents/MacOS
 cp voicetype Voicetype.app/Contents/MacOS/voicetype
-codesign --force --sign - --identifier local.voicetype.app Voicetype.app
+./sign-app.sh Voicetype.app

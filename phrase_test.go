@@ -82,3 +82,17 @@ func voicedChunk() []float32 {
 	}
 	return samples
 }
+
+func TestPhraseRecognizerDiscardsAudioAcrossReconnect(t *testing.T) {
+	decoder := &fakePhraseDecoder{}
+	recognizer := newPhraseRecognizer(decoder)
+	for i := 0; i < 3; i++ {
+		if _, _, err := recognizer.Accept(voicedChunk()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recognizer.reset()
+	if text, err := recognizer.Finish(); err != nil || text != "" || decoder.calls != 0 {
+		t.Fatalf("text=%q calls=%d error=%v", text, decoder.calls, err)
+	}
+}

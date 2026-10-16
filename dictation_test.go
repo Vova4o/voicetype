@@ -60,3 +60,19 @@ func TestDictationClearsRecoveredPasteError(t *testing.T) {
 		t.Fatalf("stale error = %q", problem)
 	}
 }
+
+func TestDictationRestoresStateAfterMicrophoneReconnect(t *testing.T) {
+	var active, ready bool
+	var problem string
+	state := newDictationState(func(a, r bool, p, _ string) { active, ready, problem = a, r, p })
+	state.setReady()
+	state.accept("Енот текст")
+	state.recovering(errors.New("audio timeout"))
+	if !active || ready || problem == "" {
+		t.Fatalf("lost capture: active=%t ready=%t problem=%q", active, ready, problem)
+	}
+	state.setReady()
+	if !active || !ready || problem != "" {
+		t.Fatalf("restored: active=%t ready=%t problem=%q", active, ready, problem)
+	}
+}

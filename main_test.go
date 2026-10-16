@@ -148,3 +148,19 @@ type cancelRecognizer struct{ cancel context.CancelFunc }
 func (r *cancelRecognizer) Accept([]float32) (string, bool, error) { r.cancel(); return "", false, nil }
 func (*cancelRecognizer) Finish() (string, error)                  { return "", nil }
 func (*cancelRecognizer) Close()                                   {}
+
+func TestReadMicrophoneDetectsStalledCapture(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	if err := reader.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	err = readMicrophone(context.Background(), reader, make(chan []float32, 1))
+	if err == nil || !strings.Contains(err.Error(), "микрофон не передаёт звук") {
+		t.Fatalf("stall was not classified: %v", err)
+	}
+}

@@ -28,6 +28,7 @@ func (s *dictationState) setReady() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ready = true
+	s.problem = ""
 	s.publish()
 }
 
@@ -57,6 +58,16 @@ func (s *dictationState) pasted() {
 		s.problem = ""
 		s.publish()
 	}
+}
+
+func (s *dictationState) recovering(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ready = false
+	s.problem = "Переподключение микрофона: " + err.Error()
+	s.gate.pending = ""
+	s.heard = ""
+	s.publish()
 }
 
 func (s *dictationState) unavailable(err error) {

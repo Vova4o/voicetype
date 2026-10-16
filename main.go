@@ -103,7 +103,6 @@ func run(args []string, stdout, stderr io.Writer, state *dictationState) error {
 	defer engine.Close()
 	logger.Info("модель GigaAM v3 готова; текст вставляется после паузы", "dir", *modelDir)
 
-	state.setReady()
 	logger.Info("ожидание команды «Енот текст»; остановка — «Енот стоп»", "device", *device)
 	deliver := func(ctx context.Context, text string) error {
 		payload, event := state.accept(text)
@@ -132,21 +131,42 @@ func run(args []string, stdout, stderr io.Writer, state *dictationState) error {
 		}
 		return nil
 	}
-	return listen(ctx, *device, engine, deliver)
+	if *stdoutOnly {
+		return listen(ctx, *device, engine, deliver)
+	}
+	return superviseCapture(ctx, func(ctx context.Context) error {
+		return listenCapture(ctx, *device, engine, deliver, microphoneTimeout, func() {
+			state.setReady()
+			logger.Info("звук с микрофона поступает", "device", *device)
+		})
+	}, func(err error) {
+		engine.reset()
+		state.recovering(err)
+		logger.Warn("захват звука потерян; переподключение микрофона", "error", err, "device", *device)
+	}, time.Second)
 }
 
 func listen(ctx context.Context, device string, engine recognizer, deliver func(context.Context, string) error) error {
-	ctx, cancel := context.WithCancel(ctx)
+	return listenCapture(ctx, device, engine, deliver, microphoneTimeout, nil)
+}
+
+func listenCapture(ctx context.Context, device string, engine recognizer, deliver func(context.Context, string) error, idleTimeout time.Duration, ready func()) error {
+	captureCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "avfoundation", "-i", device, "-ar", "16000", "-ac", "1", "-f", "s16le", "-")
+	cmd := exec.CommandContext(captureCtx, "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "avfoundation", "-i", device, "-ar", "16000", "-ac", "1", "-f", "s16le", "-")
 	var ffmpegErrors strings.Builder
 	cmd.Stderr = &ffmpegErrors
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("открыть поток микрофона: %w", err)
+		return &captureFailure{fmt.Errorf("открыть поток микрофона: %w", err)}
+	}
+	audioPipe, ok := pipe.(*os.File)
+	if !ok {
+		pipe.Close()
+		return &captureFailure{errors.New("поток микрофона не поддерживает таймаут чтения")}
 	}
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("запустить ffmpeg: %w", err)
+		return &captureFailure{fmt.Errorf("запустить ffmpeg: %w", err)}
 	}
 
 	chunks := make(chan []float32, 600)
@@ -154,8 +174,9 @@ func listen(ctx context.Context, device string, engine recognizer, deliver func(
 	var captureErr error
 	go func() {
 		defer close(done)
-		captureErr = readMicrophone(ctx, pipe, chunks)
+		captureErr = readMicrophone(captureCtx, microphoneReader{pipe: audioPipe, timeout: idleTimeout}, chunks)
 		if captureErr != nil {
+			cancel()
 			pipe.Close()
 		}
 		close(chunks)
@@ -173,11 +194,15 @@ func listen(ctx context.Context, device string, engine recognizer, deliver func(
 		if ctx.Err() != nil {
 			break
 		}
-		text, ready, err := engine.Accept(samples)
+		if ready != nil {
+			ready()
+			ready = nil
+		}
+		text, recognized, err := engine.Accept(samples)
 		if err != nil {
 			return fmt.Errorf("распознать звук: %w", err)
 		}
-		if ready {
+		if recognized {
 			if err := deliver(ctx, text); err != nil {
 				return fmt.Errorf("вставить распознанный текст: %w", err)
 			}
@@ -186,7 +211,7 @@ func listen(ctx context.Context, device string, engine recognizer, deliver func(
 	if ctx.Err() == nil {
 		<-done
 		if captureErr != nil {
-			return captureErr
+			return &captureFailure{captureErr}
 		}
 	}
 	text, err := engine.Finish()
@@ -228,6 +253,9 @@ func readMicrophone(ctx context.Context, input io.Reader, chunks chan<- []float3
 		if readErr != nil {
 			if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
 				return nil
+			}
+			if errors.Is(readErr, os.ErrDeadlineExceeded) {
+				return fmt.Errorf("микрофон не передаёт звук: %w", readErr)
 			}
 			return fmt.Errorf("прочитать звук микрофона: %w", readErr)
 		}
